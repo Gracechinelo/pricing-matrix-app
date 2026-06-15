@@ -9,12 +9,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- HIDE STREAMLIT BRANDING ---
+# --- HIDE STREAMLIT BRANDING (AGGRESSIVE) ---
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
             footer {visibility: hidden;}
             header {visibility: hidden;}
+            
+            /* Nuke the floating Creator Badge and Toolbar */
+            [data-testid="stCreatorProfile"] {display: none !important;}
+            [data-testid="stToolbar"] {display: none !important;}
+            .viewerBadge_container {display: none !important;}
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
