@@ -38,6 +38,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Helper function to strictly format currency outputs consistently across entire app
+def format_currency(val, sym):
+    return f"{sym}{val:,.2f}"
+
 # Conversion Factors
 DRY_CONV = {
     "g": 1.0,
@@ -73,7 +77,7 @@ if "materials" not in st.session_state:
     ]
 
 # Helper function to compute cost and yield
-def compute_material_stats(mat, is_us):
+def compute_material_stats(mat, is_us, symbol):
     buy_qty = float(mat["buy_qty"])
     cost = float(mat["cost"])
     use_qty = float(mat["use_qty"])
@@ -104,7 +108,7 @@ def compute_material_stats(mat, is_us):
     leftover = max(0.0, buy_total_base - (yield_val * use_total_base)) / use_factor
     
     walkthrough = (
-        f"{buy_qty} {mat['buy_unit']} ({buy_total_base:.1f}{base_unit}) bought for {cost:.2f}. "
+        f"{buy_qty} {mat['buy_unit']} ({buy_total_base:.1f}{base_unit}) bought for {format_currency(cost, symbol)}. "
         f"Each craft uses {use_qty} {mat['use_unit']} ({use_total_base:.1f}{base_unit}). "
         f"Produces ~{raw_yield:.2f} items."
     )
@@ -147,7 +151,7 @@ with left_col:
         labor_time = st.number_input("Time Spent per Item (Minutes)", min_value=0.0, value=25.0, step=1.0)
     
     total_labor_cost = (labor_time / 60.0) * hourly_wage
-    st.info(f"💡 Calculated internal labor cost: **{symbol}{total_labor_cost:.2f}** per crafted item.")
+    st.info(f"💡 Calculated internal labor cost: **{format_currency(total_labor_cost, symbol)}** per crafted item.")
 
     st.markdown("<hr style='margin: 1.5rem 0; border: 0; border-top: 1px solid rgba(255,255,255,0.05);'>", unsafe_allow_html=True)
 
@@ -190,13 +194,13 @@ with left_col:
                     mats_to_delete.append(i)
                     
             # Compute yield details
-            cost_item, item_yield, leftover, walkthrough = compute_material_stats(mat, is_us)
+            cost_item, item_yield, leftover, walkthrough = compute_material_stats(mat, is_us, symbol)
             total_materials_cost += cost_item
             
             st.markdown(f"""
             <div style="background-color: rgba(245, 158, 11, 0.08); padding: 8px 12px; border-radius: 6px; font-size: 12px; border-left: 3px solid #f59e0b; margin-top: 8px;">
                 <strong>💡 Multi-Unit Yield Assistant:</strong> {walkthrough}<br>
-                <strong>💰 Projected Cost per Item:</strong> {symbol}{cost_item:.3f} | 
+                <strong>💰 Projected Cost per Item:</strong> {format_currency(cost_item, symbol)} | 
                 <strong>Leftover batch residues:</strong> {leftover:.3f} {mat['use_unit']}
             </div>
             """, unsafe_allow_html=True)
@@ -239,7 +243,6 @@ with left_col:
 def calculate_etsy_fees(item_price, shipping_fee, is_usd, apply_uk_vat):
     # Standard rates
     # Listing Fee: $0.20 USD converted to GBP if UK
-    listing_fee_usd = 0.20
     listing_fee = 0.20 if is_usd else 0.16 # High approximation or Etsy UK standard listing
     
     # Transaction Fee: 6.5% of total paid (listing price + shipping charged)
@@ -273,26 +276,32 @@ def calculate_etsy_fees(item_price, shipping_fee, is_usd, apply_uk_vat):
         "total": total_fees
     }
 
-# Pricing solver - Find recommended item listing price to achieve exact target margin
+# Pricing solver - Find recommended item listing price to achieve exact target margin algebraically
 def solve_recommended_price(costs_sum, shipping_fee, is_usd, apply_uk_vat, target_m):
-    # Newton-Raphson standard search for exact premium price boundaries
-    recommended_p = costs_sum # start guess
-    for _ in range(50):
-        fees = calculate_etsy_fees(recommended_p, shipping_fee, is_usd, apply_uk_vat)
-        gross_rev = recommended_p + shipping_fee
-        total_spent = costs_sum + fees["total"]
-        net_profit = gross_rev - total_spent
-        current_margin_pct = net_profit / gross_rev if gross_rev > 0 else 0
-        diff = current_margin_pct - target_m
-        
-        # adjusting step size
-        if abs(diff) < 0.0001:
-            break
-        recommended_p += (diff * gross_rev) * 1.05
-        if recommended_p < 0.01:
-            recommended_p = 0.01
-            break
-    return max(0.01, recommended_p)
+    # Establish VAT factor
+    vat_multiplier = 1.0
+    if not is_usd and apply_uk_vat:
+        vat_multiplier = 1.2
+
+    # Variable Fee Percent representing transaction and processing fee rates
+    if is_usd:
+        var_fee_pct = (0.065 + 0.03) * vat_multiplier  # 0.095
+    else:
+        var_fee_pct = (0.065 + 0.04) * vat_multiplier  # 0.105 * 1.2 = 0.126
+
+    # Fixed fees components (listing fee + physical payment processing fixed charge)
+    if is_usd:
+        fixed_fees = (0.20 + 0.25) * vat_multiplier  # 0.45
+    else:
+        fixed_fees = (0.16 + 0.20) * vat_multiplier  # 0.432 if apply_uk_vat, else 0.36
+
+    denominator = 1.0 - var_fee_pct - target_m
+    # Prevent divide-by-zero or negative denominator mapping representing mathematically impossible margins
+    if denominator <= 0.01:
+        denominator = 0.01
+
+    raw_price = ((costs_sum + fixed_fees) / denominator) - shipping_fee
+    return max(0.01, raw_price)
 
 recommended_listing_price = solve_recommended_price(gross_cost_per_item, shipping_fee=shipping_charged, is_usd=is_us, apply_uk_vat=apply_vat, target_m=target_margin)
 recommended_fees = calculate_etsy_fees(recommended_listing_price, shipping_charged, is_us, apply_vat)
@@ -310,7 +319,7 @@ with right_col:
     st.markdown(f"""
     <div style="background-color: #111827; padding: 20px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 20px;">
         <span style="font-size: 11px; color:#a1a1aa; font-weight:600; text-transform: uppercase; letter-spacing: 0.1em; display:block;">Recommended Product Listing Price</span>
-        <strong style="font-size: 2.5rem; color:#f59e0b; font-weight: 850; font-family: monospace; display:block; margin: 4px 0;">{symbol}{recommended_listing_price:.2f}</strong>
+        <strong style="font-size: 2.5rem; color:#f59e0b; font-weight: 850; font-family: monospace; display:block; margin: 4px 0;">{format_currency(recommended_listing_price, symbol)}</strong>
         <p style="font-size: 12px; color:#10b981; margin:0; font-weight: 600;">✅ Achieves specified {target_margin*100:.0f}% Target Profit Margin</p>
     </div>
     """, unsafe_allow_html=True)
@@ -319,13 +328,13 @@ with right_col:
     with c1:
         st.metric(
             label="Break-Even Price", 
-            value=f"{symbol}{breakeven_listing_price:.2f}",
+            value=format_currency(breakeven_listing_price, symbol),
             help="Listing less than this amount directly guarantees transactional losses."
         )
     with c2:
         st.metric(
             label="Sum of All Production Costs", 
-            value=f"{symbol}{gross_cost_per_item:.2f}",
+            value=format_currency(gross_cost_per_item, symbol),
             help="Total of raw materials, labor, shipping cost, and packaging items combined."
         )
 
@@ -335,7 +344,18 @@ with right_col:
     st.markdown("### 🎚️ \"What-If\" Selling Price Simulator")
     st.markdown("Test a custom listing retail price to see immediate breakdown projection updates.")
     
-    sim_price = st.slider(f"Simulate Customer Price Selection ({symbol})", min_value=float(round(breakeven_listing_price/2.0, 1)), max_value=float(round(recommended_listing_price*2.0, 1) + 20.0), value=float(round(recommended_listing_price, 1)), step=0.1)
+    # Restrict min_value of inputs to minimum of 1.00 as requested to prevent division by zero anywhere
+    sim_min_val = max(1.00, float(round(breakeven_listing_price/2.0, 1)))
+    sim_max_val = max(sim_min_val + 5.0, float(round(recommended_listing_price*2.0, 1) + 20.0))
+    sim_val = max(sim_min_val, float(round(recommended_listing_price, 1)))
+    
+    sim_price = st.slider(
+        f"Simulate Customer Price Selection ({symbol})",
+        min_value=sim_min_val,
+        max_value=sim_max_val,
+        value=sim_val,
+        step=0.1
+    )
     
     sim_fees = calculate_etsy_fees(sim_price, shipping_charged, is_us, apply_vat)
     sim_gross_revenue = sim_price + shipping_charged
@@ -350,14 +370,14 @@ with right_col:
     st.markdown(f"""
     <div style="background-color: #0d1117; padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); text-align: center; margin-bottom: 15px;">
         <span style="font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; font-weight:bold;">Simulator Net Take-Home</span>
-        <strong style="font-size:1.8rem; font-family: monospace; color:{status_color}; display:block;">{symbol}{sim_net_profit:.2f}</strong>
+        <strong style="font-size:1.8rem; font-family: monospace; color:{status_color}; display:block;">{format_currency(sim_net_profit, symbol)}</strong>
         <span style="display:inline-block; font-size:11px; background-color:{status_color}25; color:{status_color}; font-weight:bold; border-radius:100px; padding: 2px 8px;">
             {sim_margin_pct:.1f}% NET MARGIN ({status_label})
         </span>
     </div>
     """, unsafe_allow_html=True)
 
-    # Where does the money go? Interactive bar charts
+    # Where does the money go? Stacked metrics breakdown layout
     st.markdown("##### 🪙 Fee & Cost Distribution Breakdown")
     
     total_parts = total_materials_cost + total_labor_cost + (packaging_cost + actual_postage) + sim_fees["total"] + max(0.0, sim_net_profit)
@@ -368,26 +388,41 @@ with right_col:
         fees_pct = (sim_fees["total"] / total_parts) * 100.0
         prof_pct = (max(0.0, sim_net_profit) / total_parts) * 100.0
         
-        # Color palettes
-        st.markdown(f"""
-        <div style="height: 24px; display: flex; border-radius: 8px; overflow: hidden; font-weight: bold; font-size: 10px; color: #ffffff; text-align: center; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);">
-            <div style="width: {mat_pct}%; background-color: #a855f7; height: 100%; display: flex; align-items: center; justify-content: center;" title="Materials cost: {symbol}{total_materials_cost:.2f}">Mat</div>
-            <div style="width: {lab_pct}%; background-color: #f59e0b; height: 100%; display: flex; align-items: center; justify-content: center;" title="Labor Cost: {symbol}{total_labor_cost:.2f}">Labor</div>
-            <div style="width: {ship_pct}%; background-color: #4f46e5; height: 100%; display: flex; align-items: center; justify-content: center;" title="Postal Cost: {symbol}{packaging_cost + actual_postage:.2f}">Ship</div>
-            <div style="width: {fees_pct}%; background-color: #ef4444; height: 100%; display: flex; align-items: center; justify-content: center;" title="Etsy Platform Fees: {symbol}{sim_fees['total']:.2f}">Fees</div>
-            {"<div style='width: " + str(prof_pct) + "%; background-color: #10b981; height: 100%; display: flex; align-items: center; justify-content: center;' title='Net Profit: " + symbol + f"{sim_net_profit:.2f}'>Profit</div>" if prof_pct > 0 else ""}
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Distribution legend
-        col_lg1, col_lg2 = st.columns(2)
-        with col_lg1:
-            st.markdown(f"🟣 **Materials:** {symbol}{total_materials_cost:.2f} ({mat_pct:.1f}%)")
-            st.markdown(f"🟡 **Labor Support:** {symbol}{total_labor_cost:.2f} ({lab_pct:.1f}%)")
-            st.markdown(f"🔵 **Postage & Box:** {symbol}{packaging_cost + actual_postage:.2f} ({ship_pct:.1f}%)")
-        with col_lg2:
-            st.markdown(f"🔴 **Etsy Fees Total:** {symbol}{sim_fees['total']:.2f} ({fees_pct:.1f}%)")
-            st.markdown(f"🟢 **Take-Home Profit:** {symbol}{max(0.0, sim_net_profit):.2f} ({prof_pct:.1f}%)")
+        # Redesigned as a clean, stacked st.container with columns displaying st.metric cards to prevent poor mobile text wrapping/clashes
+        with st.container():
+            bd_col1, bd_col2 = st.columns(2)
+            with bd_col1:
+                st.metric(
+                    label="Materials Cost",
+                    value=format_currency(total_materials_cost, symbol),
+                    delta=f"{mat_pct:.1f}% allotment",
+                    delta_color="off"
+                )
+                st.metric(
+                    label="Labor Support",
+                    value=format_currency(total_labor_cost, symbol),
+                    delta=f"{lab_pct:.1f}% allotment",
+                    delta_color="off"
+                )
+                st.metric(
+                    label="Shipping & Packaging",
+                    value=format_currency(packaging_cost + actual_postage, symbol),
+                    delta=f"{ship_pct:.1f}% allotment",
+                    delta_color="off"
+                )
+            with bd_col2:
+                st.metric(
+                    label="Etsy Platform Fees",
+                    value=format_currency(sim_fees["total"], symbol),
+                    delta=f"{fees_pct:.1f}% allotment",
+                    delta_color="inverse"
+                )
+                st.metric(
+                    label="Take-Home Profit",
+                    value=format_currency(max(0.0, sim_net_profit), symbol),
+                    delta=f"{prof_pct:.1f}% allotment",
+                    delta_color="normal"
+                )
 
     # Fees itemized breakdown
     with st.expander("📝 Detailed Etsy Transaction Fees Breakdown", expanded=False):
@@ -400,10 +435,10 @@ with right_col:
                 "Combined deductions"
             ],
             "Projected cost": [
-                f"{symbol}{sim_fees['listing']:.2f}",
-                f"{symbol}{sim_fees['transaction']:.2f}",
-                f"{symbol}{sim_fees['processing']:.2f}",
-                f"{symbol}{sim_fees['total']:.2f}"
+                format_currency(sim_fees['listing'], symbol),
+                format_currency(sim_fees['transaction'], symbol),
+                format_currency(sim_fees['processing'], symbol),
+                format_currency(sim_fees['total'], symbol)
             ]
         })
         st.table(fee_tbl)
