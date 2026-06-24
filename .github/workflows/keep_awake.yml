@@ -1,0 +1,17 @@
+name: Keep Hugging Face Space Awake
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping_space:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Ping the Calculator
+        run: |
+          echo "Pinging Hugging Face Space to prevent sleep mode..."
+          curl -I https://popul-etsy-pricing-calc.hf.space
+          echo "Ping complete!"
