@@ -2,7 +2,7 @@ name: Deploy to Hugging Face Space
 
 on:
   push:
-    branches: [main] # Change to 'master' if your main branch is called master
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -13,11 +13,9 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Sync to Hugging Face
-        uses: huggingface/hub-sync@v0.1.0
-        with:
-          github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: Popul/etsy-pricing-calc
-          hf_token: ${{ secrets.HF_TOKEN }}
-          repo_type: space
-          space_sdk: streamlit
+          
+      - name: Force Push to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git push --force https://Popul:$HF_TOKEN@huggingface.co/spaces/Popul/etsy-pricing-calc main
